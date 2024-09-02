@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Interactive World Map</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css">
+    <style>
+        body { margin: 0; }
+        #map { height: 100vh; }
+        .info {
+            padding: 6px 8px;
+            font: 14px Arial, Helvetica, sans-serif;
+            background: white;
+            border-radius: 5px;
+            box-shadow: 0 0 15px rgba(0,0,0,0.2);
+            position: absolute;
+            pointer-events: none; /* Ensure the info box does not block map interactions */
+            z-index: 1000; /* Make sure the info box is on top */
+        }
+        .info h4 {
+            margin: 0 0 5px;
+            color: #777;
+        }
+    </style>
+</head>
+<body>
+    <div id="map"></div>
+    <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+    <script>
+        var map = L.map('map', {
+            center: [20, 0],
+            zoom: 2,
+            zoomControl: true,
+            doubleClickZoom: true,
+            scrollWheelZoom: true,
+            boxZoom: true,
+            dragging: true
+        });
+
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            maxZoom: 18,
+            attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+        }).addTo(map);
+
+        var slaveryData = {
+            "The Americas": "6.3 million people living in modern slavery.",
+            "The Arab States": "4.1 million people living in modern slavery.",
+            "Asia and the Pacific": "24.9 million people living in modern slavery.",
+            "Europe and Central Asia": "3.6 million people living in modern slavery.",
+            "Africa": "6.5 million people living in modern slavery."
+        };
+
+        var regions = {
+            "The Americas": ["Venezuela", "The Bahamas", "Puerto Rico", "Belize", "Suriname", "Haiti", "El Salvador", "Guatemala", "Colombia", "Ecuador", "Nicaragua", "Jamaica", "Bolivia", "Peru", "Honduras", "Dominican Republic", "Mexico", "Paraguay", "Cuba", "Brazil", "Trinidad and Tobago", "Panama", "Guyana", "Argentina", "United States of America", "Costa Rica", "Chile", "Uruguay", "Canada", "Alaska", "French Guiana"],
+            "The Arab States": ["Saudi Arabia", "United Arab Emirates", "Kuwait", "Jordan", "Syria", "Lebanon", "Qatar", "Bahrain", "Oman", "Yemen", "Iraq"],
+            "Asia and the Pacific": ["North Korea", "Afghanistan", "Myanmar", "Pakistan", "Papua New Guinea", "India", "Philippines", "Iran", "Bangladesh", "Indonesia", "Sri Lanka", "Malaysia", "Timor-Leste", "Thailand", "Lao PDR", "Cambodia", "Vietnam", "Mongolia", "China", "South Korea", "Nepal", "Hong Kong", "Singapore", "Taiwan", "New Zealand", "Australia", "Japan"],
+            "Europe and Central Asia": ["Turkey", "Republic of Serbia", "Czech Republic", "Iceland", "Tajikistan", "Russia", "Ukraine", "North Macedonia", "Turkmenistan", "Albania", "Belarus", "Kazakhstan", "Azerbaijan", "Bosnia and Herzegovina", "Moldova", "Armenia", "Kyrgyzstan", "Bulgaria", "Cyprus", "Kosovo", "Georgia", "Slovakia", "Romania", "Uzbekistan", "Serbia", "Hungary", "Greece", "Lithuania", "Poland", "Croatia", "Slovenia", "Czechia", "Estonia", "Portugal", "Israel", "Latvia", "Italy", "Spain", "France", "Austria", "United Kingdom", "Finland", "Ireland", "Belgium", "Denmark", "Sweden", "Netherlands", "Germany", "Norway", "Switzerland"],
+            "Africa": ["Eritrea", "Western Sahara", "Somaliland", "Republic of Congo", "Guinea Bissau", "Ivory Coast", "Mauritania", "South Sudan", "Republic of the Congo", "Nigeria", "Equatorial Guinea", "Gabon", "Burundi", "Côte d’Ivoire", "Djibouti", "Libya", "Gambia", "Ethiopia", "Somalia", "Chad", "Cameroon", "Central African Republic", "Mali", "Zambia", "Kenya", "Zimbabwe", "Malawi", "Niger", "Madagascar", "Democratic Republic of the Congo", "Guinea-Bissau", "Egypt", "Rwanda", "Uganda", "Angola", "Guinea", "Sudan", "Burkina Faso", "Eswatini", "Sierra Leone", "Togo", "Liberia", "Benin", "Mozambique", "Senegal", "Ghana", "Tanzania", "South Africa", "Namibia", "Tunisia", "Morocco", "Algeria", "Botswana", "Lesotho", "Mauritius", "United Republic of Tanzania", "Republic of the Congo", "Côte dʼvoire"]
+        };
+
+        var geojson;
+        var highlightedLayers = [];
+        var regionLayers = {}; // To store region layers for highlighting
+
+        // Fetch GeoJSON data
+        fetch('https://raw.githubusercontent.com/datasets/geo-countries/master/data/countries.geojson')
+            .then(response => response.json())
+            .then(data => {
+                geojson = L.geoJSON(data, {
+                    style: feature => ({
+                        fillColor: getRegionColor(getRegionByCountry(feature.properties.name || feature.properties.ADMIN || feature.properties.ADMIN_NAME || "Unknown Country")),
+                        weight: 0, // Border thickness
+                        opacity: 1,
+                        color: '#BBBBBB', // Neutral border color
+                        dashArray: '3',
+                        fillOpacity: 0.7
+                    }),
+                    onEachFeature: onEachFeature
+                }).addTo(map);
+
+                // Disable Antarctica and Greenland
+                disableAntarcticaAndGreenland();
+
+                // Create region layers
+                createRegionLayers();
+            });
+
+        // Function to get color based on region
+        function getRegionColor(region) {
+            switch (region) {
+                case "The Americas":
+                    return '#FFB6C1'; // Light pink
+                case "The Arab States":
+                    return '#ffc6fc'; // Light orange
+                case "Asia and the Pacific":
+                    return '#FFDDC1'; // Light peach
+                case "Europe and Central Asia":
+                    return '#CCE5FF'; // Light blue
+                case "Africa":
+                    return '#c6ffce'; // Light sky blue
+                default:
+                    return '#FFFFFF'; // Default to white if no region found
+            }
+        }
+
+        // Function to handle feature events
+        function onEachFeature(feature, layer) {
+            var countryName = feature.properties.name || feature.properties.ADMIN || feature.properties.ADMIN_NAME || "Unknown Country";
+            layer.on({
+                mouseover: highlightRegion,
+                mouseout: resetHighlight
+            });
+            layer.setStyle({
+                clickable: true
+            });
+        }
+
+        // Function to highlight region on hover
+        function highlightRegion(e) {
+            var layer = e.target;
+            var countryName = layer.feature.properties.name || layer.feature.properties.ADMIN || layer.feature.properties.ADMIN_NAME || "Unknown Country";
+            var region = getRegionByCountry(countryName);
+
+            if (region) {
+                // Reset previously highlighted regions
+                resetHighlight();
+
+                // Highlight new region with specific color
+                var highlightColor = getRegionColor(region);
+                regionLayers[region].forEach(function(layer) {
+                    layer.setStyle({
+                        fillColor: highlightColor,
+                        weight: 2,
+                        color: highlightColor,
+                        dashArray: '',
+                        fillOpacity: 0.7
+                    });
+                    highlightedLayers.push(layer);
+                });
+
+                // Show region name on hover
+                var info = document.createElement('div');
+                info.className = 'info';
+                info.innerHTML = '<h4>' + region + '</h4><p>' + (slaveryData[region] || 'No data available') + '</p>';
+                map.getContainer().appendChild(info);
+
+                // Position the info box based on mouse position
+                map.on('mousemove', function(e) {
+                    info.style.left = e.containerPoint.x + 'px';
+                    info.style.top = e.containerPoint.y + 'px';
+                });
+            }
+        }
+
+        // Function to reset highlight on mouseout
+        function resetHighlight() {
+            highlightedLayers.forEach(function(layer) {
+                layer.setStyle({
+                    fillOpacity: 0.7,
+                    weight: 0,
+                    color: '#BBBBBB'
+                });
+            });
+            highlightedLayers = [];
+            var info = document.querySelector('.info');
+            if (info) {
+                info.remove();
+            }
+        }
+
+        // Function to get region by country name
+        function getRegionByCountry(countryName) {
+            for (var region in regions) {
+                if (regions[region].includes(countryName)) {
+                    return region;
+                }
+            }
+            return null;
+        }
+
+        // Function to disable Antarctica and Greenland
+        function disableAntarcticaAndGreenland() {
+            geojson.eachLayer(function(layer) {
+                var name = layer.feature.properties.name || layer.feature.properties.ADMIN || layer.feature.properties.ADMIN_NAME || "Unknown Country";
+                if (name === "Antarctica" || name === "Greenland") {
+                    layer.setStyle({
+                        fillOpacity: 0,
+                        color: '#FFFFFF'
+                    });
+                    layer.off();
+                }
+            });
+        }
+
+        // Function to create region layers for highlighting
+        function createRegionLayers() {
+            for (var region in regions) {
+                regionLayers[region] = [];
+                geojson.eachLayer(function(layer) {
+                    var countryName = layer.feature.properties.name || layer.feature.properties.ADMIN || layer.feature.properties.ADMIN_NAME || "Unknown Country";
+                    if (regions[region].includes(countryName)) {
+                        regionLayers[region].push(layer);
+                    }
+                });
+            }
+        }
+    </script>
+</body>
+</html>
